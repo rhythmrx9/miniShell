@@ -10,6 +10,8 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "jobs.h"
+#include "signals.h"
 #include "util.h"
 
 static int open_redirect(const char *path, int flags, int target_fd)
@@ -60,9 +62,11 @@ static int wait_status_to_code(int status)
 
 /* Runs in the forked child; never returns. */
 static void run_child(const pipeline *p, size_t idx, int in_fd, int out_fd,
-                      pid_t pgid)
+                      pid_t pgid, const sigset_t *mask)
 {
     const command *c = &p->cmds[idx];
+
+    signals_reset_child(mask);
 
     if (p->background) {
         /* Own process group so terminal signals don't reach the job. */
@@ -91,7 +95,7 @@ static void run_child(const pipeline *p, size_t idx, int in_fd, int out_fd,
     _exit(err == ENOENT ? 127 : 126);
 }
 
-int execute(const pipeline *p)
+int execute(const pipeline *p, const char *cmdline)
 {
     if (p->ncmds == 0)
         return 0;
@@ -101,9 +105,16 @@ int execute(const pipeline *p)
     pid_t pgid = 0;
     int prev_read = STDIN_FILENO;
     int status = 0;
+    sigset_t prev_mask;
 
     /* Don't let buffered output get duplicated into the children. */
     fflush(NULL);
+
+    /*
+     * Hold SIGCHLD until every foreground child is waited for, so the
+     * handler only ever reaps background jobs.
+     */
+    signals_block_chld(&prev_mask);
 
     for (size_t i = 0; i < p->ncmds; i++) {
         int fds[2] = {-1, -1};
@@ -128,7 +139,8 @@ int execute(const pipeline *p)
         if (pid == 0) {
             if (!is_last)
                 close(fds[0]);
-            run_child(p, i, prev_read, is_last ? STDOUT_FILENO : fds[1], pgid);
+            run_child(p, i, prev_read, is_last ? STDOUT_FILENO : fds[1], pgid,
+                      &prev_mask);
         }
 
         if (p->background) {
@@ -150,8 +162,10 @@ int execute(const pipeline *p)
         close(prev_read);
 
     if (p->background) {
-        if (started > 0)
-            printf("[%d]\n", (int)pids[started - 1]);
+        if (started > 0) {
+            int id = jobs_add(pids, started, cmdline);
+            printf("[%d] %d\n", id, (int)pids[started - 1]);
+        }
     } else {
         for (size_t i = 0; i < started; i++) {
             int wstatus;
@@ -166,6 +180,7 @@ int execute(const pipeline *p)
         }
     }
 
+    signals_restore_mask(&prev_mask);
     free(pids);
     return status;
 }

@@ -6,8 +6,9 @@
 /*
  * Run a parsed pipeline. Foreground pipelines are waited for and the exit
  * status of the last command is returned (128 + signal number if it was
- * killed). Background pipelines return 0 immediately.
+ * killed). Background pipelines are registered as jobs under cmdline and
+ * return 0 immediately.
  */
-int execute(const pipeline *p);
+int execute(const pipeline *p, const char *cmdline);
 
 #endif

@@ -6,7 +6,9 @@
 #include <unistd.h>
 
 #include "exec.h"
+#include "jobs.h"
 #include "parser.h"
+#include "signals.h"
 #include "tokenizer.h"
 
 #define PROMPT "minishell$ "
@@ -24,7 +26,7 @@ static int run_line(const char *line, int last_status)
     }
     token_list_free(&toks);
 
-    int status = p.ncmds ? execute(&p) : last_status;
+    int status = p.ncmds ? execute(&p, line) : last_status;
     pipeline_free(&p);
     return status;
 }
@@ -36,13 +38,28 @@ int main(void)
     size_t cap = 0;
     int status = 0;
 
+    signals_init();
+
     for (;;) {
+        jobs_notify();
+        signals_take_interrupt();
         if (interactive) {
             fputs(PROMPT, stdout);
             fflush(stdout);
         }
 
+        errno = 0;
         ssize_t n = getline(&line, &cap, stdin);
+        if (n < 0 && errno == EINTR) {
+            /* ^C at the prompt: drop the line and prompt again. */
+            clearerr(stdin);
+            if (signals_take_interrupt()) {
+                if (interactive)
+                    putchar('\n');
+                status = 130;
+            }
+            continue;
+        }
         if (n < 0) {
             if (interactive)
                 putchar('\n');
