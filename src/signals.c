@@ -64,6 +64,11 @@ void signals_reset_child(const sigset_t *mask)
     set_handler(SIGINT, SIG_DFL, 0);
     set_handler(SIGQUIT, SIG_DFL, 0);
     set_handler(SIGCHLD, SIG_DFL, 0);
+    /*
+     * The shell may have been started with SIGPIPE ignored (CI runners do
+     * this); a pipeline stage whose reader went away should still just die.
+     */
+    set_handler(SIGPIPE, SIG_DFL, 0);
     sigprocmask(SIG_SETMASK, mask, NULL);
 }
 
