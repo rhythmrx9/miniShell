@@ -1,9 +1,11 @@
 #include "tokenizer.h"
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "shell.h"
 #include "util.h"
 
 typedef struct {
@@ -20,6 +22,12 @@ static void sb_push(strbuf *sb, char c)
     }
     sb->buf[sb->len++] = c;
     sb->buf[sb->len] = '\0';
+}
+
+static void sb_append(strbuf *sb, const char *s)
+{
+    while (*s)
+        sb_push(sb, *s++);
 }
 
 static char *sb_finish(strbuf *sb)
@@ -48,8 +56,47 @@ static int is_operator(char c)
     return c == '|' || c == '<' || c == '>' || c == '&';
 }
 
-/* Read one word starting at line[*pos]; advances *pos past it. */
-static int read_word(const char *line, size_t *pos, strbuf *sb)
+/*
+ * Expand the $NAME or $? at line[*pos] into sb and advance *pos past it.
+ * A '$' not followed by a name is kept literally.
+ */
+static void expand_var(const char *line, size_t *pos, strbuf *sb)
+{
+    size_t i = *pos + 1;
+
+    if (line[i] == '?') {
+        char num[16];
+        snprintf(num, sizeof num, "%d", g_shell.last_status);
+        sb_append(sb, num);
+        *pos = i + 1;
+        return;
+    }
+    if (!(isalpha((unsigned char)line[i]) || line[i] == '_')) {
+        sb_push(sb, '$');
+        *pos = i;
+        return;
+    }
+
+    size_t start = i;
+    while (isalnum((unsigned char)line[i]) || line[i] == '_')
+        i++;
+
+    char name[256];
+    size_t len = i - start < sizeof name - 1 ? i - start : sizeof name - 1;
+    memcpy(name, line + start, len);
+    name[len] = '\0';
+
+    const char *value = getenv(name);
+    if (value)
+        sb_append(sb, value);
+    *pos = i;
+}
+
+/*
+ * Read one word starting at line[*pos]; advances *pos past it. *quoted is
+ * set if any part of the word was quoted, so "" survives as an empty word.
+ */
+static int read_word(const char *line, size_t *pos, strbuf *sb, int *quoted)
 {
     size_t i = *pos;
 
@@ -57,6 +104,7 @@ static int read_word(const char *line, size_t *pos, strbuf *sb)
         char c = line[i];
 
         if (c == '\'') {
+            *quoted = 1;
             i++;
             while (line[i] && line[i] != '\'')
                 sb_push(sb, line[i++]);
@@ -66,8 +114,13 @@ static int read_word(const char *line, size_t *pos, strbuf *sb)
             }
             i++;
         } else if (c == '"') {
+            *quoted = 1;
             i++;
             while (line[i] && line[i] != '"') {
+                if (line[i] == '$') {
+                    expand_var(line, &i, sb);
+                    continue;
+                }
                 if (line[i] == '\\' && line[i + 1] && strchr("\"\\$", line[i + 1]))
                     i++;
                 sb_push(sb, line[i++]);
@@ -77,7 +130,10 @@ static int read_word(const char *line, size_t *pos, strbuf *sb)
                 return -1;
             }
             i++;
+        } else if (c == '$') {
+            expand_var(line, &i, sb);
         } else if (c == '\\') {
+            *quoted = 1;
             i++;
             if (line[i])
                 sb_push(sb, line[i++]);
@@ -124,11 +180,15 @@ int tokenize(const char *line, token_list *out)
             }
         } else {
             strbuf sb = {0};
-            if (read_word(line, &i, &sb) < 0) {
+            int quoted = 0;
+            if (read_word(line, &i, &sb, &quoted) < 0) {
                 free(sb.buf);
                 token_list_free(out);
                 return -1;
             }
+            /* An unquoted word that expanded to nothing disappears. */
+            if (sb.len == 0 && !quoted)
+                continue;
             push_token(out, TOK_WORD, sb_finish(&sb));
         }
     }

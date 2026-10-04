@@ -29,7 +29,8 @@ typedef struct {
  * Whitespace separates words. Single quotes preserve everything literally,
  * double quotes allow \" \\ \$ escapes, and a backslash outside quotes
  * escapes the next character. Adjacent quoted and unquoted pieces join into
- * one word. An unquoted '#' at the start of a word begins a comment.
+ * one word. $NAME and $? are expanded outside single quotes (without field
+ * splitting). An unquoted '#' at the start of a word begins a comment.
  *
  * Returns 0 on success, or -1 on a syntax error after printing a message.
  */
