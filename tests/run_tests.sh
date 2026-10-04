@@ -12,6 +12,14 @@ trap 'rm -rf "$WORKDIR"' EXIT
 pass=0
 fail=0
 
+# Emit a GitHub Actions error annotation; newlines must be encoded as %0A.
+annotate() {
+    local title=$1 msg
+    shift
+    msg=$(printf '%s\n' "$@" | sed -e 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+    printf '::error title=FAIL %s::%s\n' "$title" "$msg"
+}
+
 # check NAME EXPECTED_STDOUT SCRIPT [EXPECTED_EXIT]
 check() {
     local name=$1 expected=$2 script=$3 want_rc=${4:-0}
@@ -30,6 +38,9 @@ check() {
         printf '  script:\n%s\n' "$script" | sed 's/^/    /'
         printf '  expected (exit %s):\n%s\n' "$want_rc" "$expected" | sed 's/^/    /'
         printf '  actual (exit %s):\n%s\n' "$rc" "$actual" | sed 's/^/    /'
+        if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+            annotate "$name" "expected (exit $want_rc): $expected" "actual (exit $rc): $actual"
+        fi
     fi
 }
 
@@ -74,7 +85,7 @@ check "background job is reaped" $'[1] PID\n[1]  Done\t\ttrue &' $'true &\nsleep
 check "background job exit status" $'[1] PID\n[1]  Exit 3\t\tsh -c \'exit 3\' &' $'sh -c \'exit 3\' &\nsleep 0.3' 0
 check "foreground runs while job is busy" $'[1] PID\nfg\n[1]  Done\t\tsleep 0.2 &' $'sleep 0.2 &\necho fg\nsleep 1' 0
 # strsignal() text differs between libcs ("Terminated" vs "Terminated: 15").
-term_msg=$(case "$(uname)" in Darwin) echo "Terminated: 15" ;; *) echo "Terminated" ;; esac)
+if [[ "$(uname)" == Darwin ]]; then term_msg="Terminated: 15"; else term_msg="Terminated"; fi
 check "killed foreground command" "$term_msg" 'sh -c "kill -TERM \$\$"' 143
 
 # --- built-ins ---------------------------------------------------------------
