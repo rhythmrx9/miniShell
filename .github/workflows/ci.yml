@@ -1,0 +1,24 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: make
+      - name: Test
+        run: make test
+      - name: Test with sanitizers
+        run: |
+          make clean
+          make test CFLAGS="-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer" \
+                    LDFLAGS="-fsanitize=address,undefined"
