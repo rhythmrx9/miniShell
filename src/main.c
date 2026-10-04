@@ -6,18 +6,23 @@
 #include <unistd.h>
 
 #include "exec.h"
+#include "history.h"
 #include "jobs.h"
 #include "parser.h"
+#include "shell.h"
 #include "signals.h"
 #include "tokenizer.h"
 
 #define PROMPT "minishell$ "
+
+shell_state g_shell;
 
 static int run_line(const char *line, int last_status)
 {
     token_list toks;
     pipeline p;
 
+    history_add(line);
     if (tokenize(line, &toks) < 0)
         return 2;
     if (parse(&toks, &p) < 0) {
@@ -36,7 +41,6 @@ int main(void)
     int interactive = isatty(STDIN_FILENO);
     char *line = NULL;
     size_t cap = 0;
-    int status = 0;
 
     signals_init();
 
@@ -56,7 +60,7 @@ int main(void)
             if (signals_take_interrupt()) {
                 if (interactive)
                     putchar('\n');
-                status = 130;
+                g_shell.last_status = 130;
             }
             continue;
         }
@@ -68,9 +72,12 @@ int main(void)
         if (n > 0 && line[n - 1] == '\n')
             line[n - 1] = '\0';
 
-        status = run_line(line, status);
+        g_shell.last_status = run_line(line, g_shell.last_status);
+        if (g_shell.exit_requested)
+            break;
     }
 
     free(line);
-    return status;
+    history_clear();
+    return g_shell.last_status;
 }

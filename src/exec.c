@@ -10,6 +10,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "builtins.h"
 #include "jobs.h"
 #include "signals.h"
 #include "util.h"
@@ -86,6 +87,13 @@ static void run_child(const pipeline *p, size_t idx, int in_fd, int out_fd,
     if (apply_redirections(c) < 0)
         _exit(1);
 
+    builtin_fn builtin = builtin_lookup(c->argv[0]);
+    if (builtin) {
+        int status = builtin(c->argv);
+        fflush(stdout);
+        _exit(status);
+    }
+
     execvp(c->argv[0], c->argv);
     int err = errno;
     if (err == ENOENT)
@@ -95,10 +103,48 @@ static void run_child(const pipeline *p, size_t idx, int in_fd, int out_fd,
     _exit(err == ENOENT ? 127 : 126);
 }
 
+/*
+ * Run a built-in inside the shell process so it can change the shell's own
+ * state (cwd, environment, exit). Redirections are undone afterwards.
+ */
+static int run_builtin_in_shell(const command *c, builtin_fn builtin)
+{
+    int saved_in = -1, saved_out = -1;
+    int status;
+
+    fflush(stdout);
+    if (c->infile)
+        saved_in = dup(STDIN_FILENO);
+    if (c->outfile)
+        saved_out = dup(STDOUT_FILENO);
+
+    if (apply_redirections(c) < 0)
+        status = 1;
+    else
+        status = builtin(c->argv);
+
+    fflush(stdout);
+    if (saved_in >= 0) {
+        dup2(saved_in, STDIN_FILENO);
+        close(saved_in);
+    }
+    if (saved_out >= 0) {
+        dup2(saved_out, STDOUT_FILENO);
+        close(saved_out);
+    }
+    return status;
+}
+
 int execute(const pipeline *p, const char *cmdline)
 {
     if (p->ncmds == 0)
         return 0;
+
+    if (p->ncmds == 1 && !p->background) {
+        builtin_fn builtin = builtin_lookup(p->cmds[0].argv[0]);
+        if (builtin)
+            return run_builtin_in_shell(&p->cmds[0], builtin);
+    }
 
     pid_t *pids = xmalloc(p->ncmds * sizeof *pids);
     size_t started = 0;
