@@ -1,0 +1,7 @@
+# Build output
+/build/
+/minishell
+
+# Editor / OS noise
+*.swp
+.DS_Store
